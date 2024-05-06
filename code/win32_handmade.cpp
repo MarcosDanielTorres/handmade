@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <stdint.h>
 #include <xinput.h>
+#include <dsound.h>
 
 #define global_variable	 	static
 #define internal		 	static
@@ -68,7 +69,7 @@ struct win32_window_dimension {
 	#define X_INPUT_GET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_STATE* pStat)
 	typedef X_INPUT_GET_STATE(x_input_get_state);
 	X_INPUT_GET_STATE(XInputGetStateStub) {
-		return 0 ;
+		return ERROR_DEVICE_NOT_CONNECTED;
 	}
 
 	global_variable x_input_get_state *XInputGetState_ = XInputGetStateStub;
@@ -78,13 +79,20 @@ struct win32_window_dimension {
 	#define X_INPUT_SET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_VIBRATION* pVibration)
 	typedef X_INPUT_SET_STATE(x_input_set_state);
 	X_INPUT_SET_STATE(XInputSetStateStub) {
-		return 0;
+		return ERROR_DEVICE_NOT_CONNECTED;
 	}
 	global_variable x_input_set_state *XInputSetState_ = XInputSetStateStub;
 	#define XInputSetState XInputSetState_
 
+
+	#define DIRECT_SOUND_CREATE(name) HRESULT WINAPI name(LPCGUID pcGuidDevice, LPDIRECTSOUND *ppDS, LPUNKNOWN pUnkOuter)
+	typedef DIRECT_SOUND_CREATE(direct_sound_create);
+
+
 	internal void Win32LoadXInput(void) {
 		HMODULE XInputLibrary =  LoadLibrary("xinput1_4.dll");
+		if (!XInputLibrary) { XInputLibrary = LoadLibrary("xinput1_3.dll"); }
+
 		if (XInputLibrary) {
 			// In the debugger to see if these were set correctly I need to inspect the variable
 			// `XInputGetState_`
@@ -120,6 +128,56 @@ internal void RenderWeirdGradient(win32_offscreen_buffer* Buffer, int xOffset, i
 	}
 }
 
+internal void Win32InitDSound(HWND Window, i32 SamplesPerSecond, i32 BufferSize) {
+	HMODULE DSoundLibrary = LoadLibrary("dsound.dll");
+	if (DSoundLibrary) {
+		direct_sound_create *DirectSoundCreate = (direct_sound_create*) GetProcAddress(DSoundLibrary, "DirectSoundCreate");
+		LPDIRECTSOUND DirectSound;
+		if(DirectSoundCreate && SUCCEEDED(DirectSoundCreate(0, &DirectSound, 0))) {
+			WAVEFORMATEX WaveFormat = {};
+			WaveFormat.wFormatTag = WAVE_FORMAT_PCM;
+			WaveFormat.nChannels = 2;
+			WaveFormat.nSamplesPerSec = SamplesPerSecond;
+			WaveFormat.wBitsPerSample = 16;
+			WaveFormat.nBlockAlign = (WaveFormat.nChannels * WaveFormat.wBitsPerSample) / 8;
+			WaveFormat.nAvgBytesPerSec = WaveFormat.nSamplesPerSec * WaveFormat.nBlockAlign;
+			WaveFormat.cbSize = 0;
+
+			if(SUCCEEDED(DirectSound->SetCooperativeLevel(Window, DSSCL_PRIORITY))){
+				DSBUFFERDESC BufferDescription = {};
+				BufferDescription.dwSize = sizeof(BufferDescription);
+				BufferDescription.dwFlags = DSBCAPS_PRIMARYBUFFER;
+
+				LPDIRECTSOUNDBUFFER PrimaryBuffer;
+				if (SUCCEEDED(DirectSound->CreateSoundBuffer(&BufferDescription, &PrimaryBuffer, 0))) {
+					if (SUCCEEDED(PrimaryBuffer->SetFormat(&WaveFormat))) {
+						OutputDebugString("Primary buffer format was set.\n");
+					}else{
+
+					}
+				}else{
+					
+				}
+			}else{
+
+			}
+			DSBUFFERDESC BufferDescription = {};
+			BufferDescription.dwSize = sizeof(BufferDescription);
+			BufferDescription.dwFlags = 0;
+			BufferDescription.dwBufferBytes = BufferSize;
+			BufferDescription.lpwfxFormat = &WaveFormat;
+
+			LPDIRECTSOUNDBUFFER SecondaryBuffer;
+			if (SUCCEEDED(DirectSound->CreateSoundBuffer(&BufferDescription, &SecondaryBuffer, 0))) {
+				OutputDebugString("Secondary buffer created successfully!\n");
+			}
+		}else{
+
+		}
+	}else{
+			
+	}
+}
 
 internal win32_window_dimension Win32GetWindowDimension(HWND Window) {
 	win32_window_dimension Result;
@@ -148,7 +206,7 @@ internal void Win32ResizeDIBSection(win32_offscreen_buffer* Buffer, int Width, i
 
 	Buffer->BytesPerPixel = BytesPerPixel;
 	int BitmapMemorySize = Width * Height * BytesPerPixel;
-	Buffer->Memory = VirtualAlloc(0, BitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
+	Buffer->Memory = VirtualAlloc(0, BitmapMemorySize, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
 }
 
 internal void Win32DisplayBufferWindow(
@@ -197,11 +255,14 @@ internal LRESULT CALLBACK Win32MainWindowCallback( HWND WinHandle, UINT Message,
 			u32 VKCode = WParam;
 			bool WasDown = ((LParam & (1 << 30)) != 0);	
 			bool IsDown = ((LParam & (1 << 31)) == 0);
-			if (WasDown == IsDown) {
-				break;
-			}
+			if (WasDown != IsDown) {
 
 			if (VKCode == 'W') {
+				bool AltKeyWasDown = ((LParam & (1 << 29)) != 0);
+				bool CtrlKeyWasDown = GetKeyState(VK_CONTROL) & (1 << 15);
+				if (CtrlKeyWasDown){
+					GlobalRunning = false;
+				}
 			}else if (VKCode == 'A') {
 			}else if (VKCode == 'S') {
 			}else if (VKCode == 'D') {
@@ -222,6 +283,10 @@ internal LRESULT CALLBACK Win32MainWindowCallback( HWND WinHandle, UINT Message,
 			}else if (VKCode == VK_LEFT) {
 			}else if (VKCode == VK_RIGHT) {
 			}
+			
+			}
+
+
 		} break;
 
 		case WM_PAINT: {
@@ -279,6 +344,10 @@ internal int CALLBACK WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR 
 			GlobalRunning = true;
 			int xOffset = 0;
 			int yOffset = 0;
+
+
+			Win32InitDSound(Window, 48000, 48000 * sizeof(i16) * 2);
+
 
 			while(GlobalRunning) {
 				MSG Message;
