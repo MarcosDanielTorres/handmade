@@ -1,8 +1,10 @@
 #include <windows.h>
 #include <stdint.h>
 #include <xinput.h>
+#include <stdio.h>
 #include <dsound.h>
 #include <math.h>
+#include <intrin.h>
 
 #define global_variable	 	static
 #define internal		 	static
@@ -53,7 +55,7 @@ struct win32_window_dimension {
 
 
 /*
-	Easier to see solution:
+	Easier to understand solution:
 		typedef DWORD WINAPI x_input_get_state(DWORD dwUserIndex, XINPUT_STATE* pStat);
 
 		DWORD WINAPI XInputGetStateStub(DWORD dwUserIndex, XINPUT_STATE* pStat){
@@ -375,6 +377,8 @@ void Win32FillSoundBuffer(win32_sound_output* sound_output, DWORD ByteToLock, DW
 }
 
 internal int CALLBACK WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CommandLine, int ShowCode) {
+	LARGE_INTEGER CountFrequencyPerSecond;
+	QueryPerformanceFrequency(&CountFrequencyPerSecond);
 	WNDCLASS WindowClass = {};
 	Win32LoadXInput();
 
@@ -422,6 +426,10 @@ internal int CALLBACK WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR 
 			Win32InitDSound(Window, sound_output.SamplesPerSecond, sound_output.SoundBufferSize);
 			Win32FillSoundBuffer(&sound_output, 0, sound_output.LatencySampleCount * sound_output.BytesPerSample);
 			GlobalSoundBuffer->Play(0, 0, DSBPLAY_LOOPING);
+
+			LARGE_INTEGER LastCounter;
+			QueryPerformanceCounter(&LastCounter);
+			i64 LastCycleCount = __rdtsc();
 
 			while(GlobalRunning) {
 				MSG Message;
@@ -515,6 +523,26 @@ internal int CALLBACK WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR 
 					Dimension.Width, Dimension.Height,
 					&GlobalBackBuffer
 				);
+
+				u64 EndCycleCount = __rdtsc();
+
+				LARGE_INTEGER EndCounter;
+				QueryPerformanceCounter(&EndCounter);
+
+
+				u64 CyclesElapsed =  EndCycleCount - LastCycleCount;
+				i64 CounterElapsedPerFrame = EndCounter.QuadPart - LastCounter.QuadPart;
+				f32 MSPerFrame =  (1000.0f * (f32)CounterElapsedPerFrame / (f32)CountFrequencyPerSecond.QuadPart);
+				f32 FramesPerSecond = ((f32)CountFrequencyPerSecond.QuadPart / (f32)CounterElapsedPerFrame);
+				f32 MCPF = (f32)CyclesElapsed / (1000.0f * 1000.0f); // million instructions
+				// multiplying the fps by MCPF gives us roughly the clock speed of the CPU.
+
+				char DebugBuffer[256];
+				sprintf(DebugBuffer, "%fms/f, %ff/s, %fmc/f\n", MSPerFrame, FramesPerSecond, MCPF);
+				OutputDebugString(DebugBuffer);
+
+				LastCounter = EndCounter;
+				LastCycleCount = EndCycleCount;
 			}
 		} else {	
 		}
